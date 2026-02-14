@@ -9,3 +9,4 @@ public class BuildConstants {
 
     public static final String PLUGIN_ID = "${plugin_id}";
 }
+

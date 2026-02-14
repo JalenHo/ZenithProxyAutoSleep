@@ -36,3 +36,6 @@ dataGenerator/run
 
 # Ignore Gradle build output directory
 build
+
+# Ignore backup directories
+backup-*/
