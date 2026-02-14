@@ -1,41 +1,72 @@
+# IDE files
 /.idea/*
 !/.idea/runConfigurations
 *.iml
+*.ipr
+/.vscode
+*.swp
+*.swo
+*~
+
+# Build outputs
+/build/
+/out/
+*.class
+dist/
+
+# Gradle
+/.gradle/
+gradle-daemon-jvm.properties
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Runtime files
 /run/
 /log/
-/build/
-/.gradle/
-*.class
-*.ipr
-/out/
-.DS_Store
-# any json-like file in top directory, including configs, auth cache, etc.
-/*.json*
 *.tmp
-/.vscode
+*.log
+
+# ZenithProxy specific
 /launcher
-/ViaLoader/
-dist/
-/*.spec
-__pycache__/
-*.exe
-*.zip
 /launcher-python*
+/ViaLoader/
 maps/
 replays/
 plugins/
+*.json*
 
-dataGenerator/run
-/dataGenerator/.gradle
+# Python (if any)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
 
-/dataGenerator/build
-/dataGenerator/.idea
+# Executables
+*.exe
+*.zip
+*.spec
 
-# Ignore Gradle project-specific cache directory
-.gradle
-
-# Ignore Gradle build output directory
-build
-
-# Ignore backup directories
+# Backup directories
 backup-*/
+
+# Generated files
+*.generated.*
+
+# Local configuration files
+local.properties
+*.local
+
+# Test coverage
+.nyc_output/
+coverage/
+
+# Dependency directories (if any)
+node_modules/
+
+# Environment files
+.env
+.env.local

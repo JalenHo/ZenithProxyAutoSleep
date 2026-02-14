@@ -7,7 +7,7 @@ version = properties["plugin_version"] as String
 val mc = properties["mc"] as String
 val pluginId = properties["plugin_id"] as String
 
-java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
+java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
 
 zenithProxyPlugin {
     templateProperties = mapOf(
@@ -18,7 +18,7 @@ zenithProxyPlugin {
         "maven_group" to group as String,
     )
     // the minimum supported java version for users of your plugin
-    javaReleaseVersion = JavaLanguageVersion.of(25)
+    javaReleaseVersion = JavaLanguageVersion.of(21)
 }
 
 repositories {
