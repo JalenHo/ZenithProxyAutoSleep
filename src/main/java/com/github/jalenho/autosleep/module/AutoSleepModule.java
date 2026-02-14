@@ -5,6 +5,8 @@ import com.zenith.cache.data.chunk.WorldTimeData;
 import com.zenith.event.client.ClientBotTick;
 import com.zenith.feature.pathfinder.goals.GoalBlock;
 import com.zenith.feature.pathfinder.goals.GoalGetToBlock;
+import com.zenith.feature.player.World;
+import com.zenith.feature.waypoints.Waypoint;
 import com.zenith.mc.block.BlockPos;
 import com.zenith.module.api.Module;
 import com.zenith.network.client.ClientSession;
@@ -19,6 +21,7 @@ import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PlayerState;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundPlayerCommandPacket;
 
 import java.util.List;
+import java.util.Optional;
 
 import static com.github.rfresh2.EventConsumer.of;
 import static com.zenith.Globals.*;
@@ -33,7 +36,8 @@ public class AutoSleepModule extends Module {
         PATHING_TO_BED,
         CLICKING_BED,
         SLEEPING,
-        PATHING_BACK
+        PATHING_BACK,
+        PATHING_TO_WAYPOINT
     }
 
     private volatile SleepState state = SleepState.IDLE;
@@ -48,6 +52,9 @@ public class AutoSleepModule extends Module {
     // Retry counter for clicking the bed
     private int clickRetries = 0;
     private static final int MAX_CLICK_RETRIES = 10;
+
+    // Whether we executed pause commands (so we know to resume later)
+    private boolean pausedOtherModules = false;
 
     @Override
     public boolean enabledSetting() {
@@ -95,6 +102,7 @@ public class AutoSleepModule extends Module {
         blockLeaveBed = false;
         prevPosSaved = false;
         clickRetries = 0;
+        pausedOtherModules = false;
     }
 
     private void handleBotTick(ClientBotTick event) {
@@ -113,6 +121,7 @@ public class AutoSleepModule extends Module {
             case CLICKING_BED -> handleClickingBed();
             case SLEEPING -> handleSleeping();
             case PATHING_BACK -> handlePathingBack();
+            case PATHING_TO_WAYPOINT -> handlePathingToWaypoint();
         }
     }
 
@@ -121,6 +130,9 @@ public class AutoSleepModule extends Module {
         boolean thunder = isThunderStorm();
         if (night || thunder) {
             info("Sleep trigger: night={}, thunder={}, dayTimeTick={}", night, thunder, getCurrentTimeOfDay());
+
+            // Execute pause commands to stop other modules (e.g. villagerTrader off)
+            executePauseCommands();
 
             // Force stop any active Baritone pathing from other modules
             if (BARITONE.isActive()) {
@@ -162,7 +174,7 @@ public class AutoSleepModule extends Module {
             if (BARITONE.isActive()) {
                 BARITONE.stop();
             }
-            startReturning();
+            startPostSleepAction();
             return;
         }
 
@@ -204,7 +216,7 @@ public class AutoSleepModule extends Module {
             if (BARITONE.isActive()) {
                 BARITONE.stop();
             }
-            startReturning();
+            startPostSleepAction();
             return;
         }
 
@@ -214,6 +226,7 @@ public class AutoSleepModule extends Module {
             if (clickRetries > MAX_CLICK_RETRIES) {
                 info("Failed to sleep after {} retries, giving up.", MAX_CLICK_RETRIES);
                 blockLeaveBed = false;
+                executeResumeCommands();
                 state = SleepState.IDLE;
                 return;
             }
@@ -243,7 +256,7 @@ public class AutoSleepModule extends Module {
         if (!CACHE.getPlayerCache().getThePlayer().isSleeping()) {
             info("Woke up! Night has been skipped.");
             blockLeaveBed = false;
-            startReturning();
+            startPostSleepAction();
             return;
         }
 
@@ -252,29 +265,108 @@ public class AutoSleepModule extends Module {
     }
 
     /**
-     * Return to the previous position after sleeping.
+     * Decide what to do after sleeping (or after early cancellation).
+     * Actions: "waypoint" (go to zenith waypoint), "return" (go to prev pos), "stay" (do nothing)
      */
-    private void startReturning() {
-        if (prevPosSaved) {
-            state = SleepState.PATHING_BACK;
-            int goalX = MathHelper.floorI(prevX);
-            int goalY = MathHelper.floorI(prevY);
-            int goalZ = MathHelper.floorI(prevZ);
-            info("Returning to previous position [{}, {}, {}]", goalX, goalY, goalZ);
-            BARITONE.pathTo(new GoalBlock(goalX, goalY, goalZ)).addExecutedListener(f -> {
-                info("Returned to previous position!");
+    private void startPostSleepAction() {
+        String action = PLUGIN_CONFIG.postSleepAction;
+        if (action == null) action = "return";
+
+        switch (action.toLowerCase()) {
+            case "waypoint" -> {
+                Optional<Waypoint> wpOpt = findWaypoint();
+                if (wpOpt.isPresent()) {
+                    Waypoint wp = wpOpt.get();
+                    // Check dimension match
+                    if (wp.dimensionData() != World.getCurrentDimension()) {
+                        info("Waypoint '{}' is in dimension {} but we are in {}. Falling back to return.",
+                            wp.id(), wp.dimension(), World.getCurrentDimension().name());
+                        fallbackReturn();
+                    } else {
+                        startPathingToWaypoint(wp);
+                    }
+                } else {
+                    info("Waypoint '{}' not found! Falling back to return.", PLUGIN_CONFIG.waypointId);
+                    fallbackReturn();
+                }
+            }
+            case "return" -> {
+                if (prevPosSaved) {
+                    startPathingBack();
+                } else {
+                    info("No previous position saved, staying at current location.");
+                    executeResumeCommands();
+                    state = SleepState.IDLE;
+                }
+            }
+            default -> { // "stay" or anything else
+                info("Staying at current location.");
+                executeResumeCommands();
                 state = SleepState.IDLE;
-            });
+            }
+        }
+    }
+
+    /**
+     * Fallback: try to return to previous position, otherwise stay.
+     */
+    private void fallbackReturn() {
+        if (prevPosSaved) {
+            startPathingBack();
         } else {
-            info("No previous position saved, staying at current location.");
+            executeResumeCommands();
             state = SleepState.IDLE;
         }
+    }
+
+    /**
+     * Look up the configured waypoint from ZenithProxy's waypoint list.
+     */
+    private Optional<Waypoint> findWaypoint() {
+        String wpId = PLUGIN_CONFIG.waypointId;
+        if (wpId == null || wpId.isBlank()) return Optional.empty();
+        return CONFIG.client.extra.waypoints.waypoints.stream()
+            .filter(w -> w.id().equalsIgnoreCase(wpId))
+            .findFirst();
+    }
+
+    private void startPathingBack() {
+        state = SleepState.PATHING_BACK;
+        int goalX = MathHelper.floorI(prevX);
+        int goalY = MathHelper.floorI(prevY);
+        int goalZ = MathHelper.floorI(prevZ);
+        info("Returning to previous position [{}, {}, {}]", goalX, goalY, goalZ);
+        BARITONE.pathTo(new GoalBlock(goalX, goalY, goalZ)).addExecutedListener(f -> {
+            info("Returned to previous position!");
+            state = SleepState.IDLE;
+        });
     }
 
     private void handlePathingBack() {
         // Check if baritone finished or isn't active
         if (!BARITONE.isActive()) {
             info("Finished returning to previous position.");
+            // Resume other modules now that we're back
+            executeResumeCommands();
+            state = SleepState.IDLE;
+        }
+    }
+
+    private void startPathingToWaypoint(Waypoint wp) {
+        state = SleepState.PATHING_TO_WAYPOINT;
+        info("Pathing to waypoint '{}' at [{}, {}, {}]", wp.id(), wp.x(), wp.y(), wp.z());
+        BARITONE.pathTo(new GoalBlock(wp.x(), wp.y(), wp.z())).addExecutedListener(f -> {
+            info("Arrived at waypoint '{}'!", wp.id());
+            state = SleepState.IDLE;
+        });
+    }
+
+    private void handlePathingToWaypoint() {
+        // Check if baritone finished or isn't active
+        if (!BARITONE.isActive()) {
+            info("Finished pathing to waypoint.");
+            // Resume other modules now that we've arrived
+            executeResumeCommands();
             state = SleepState.IDLE;
         }
     }
@@ -329,6 +421,42 @@ public class AutoSleepModule extends Module {
 
     public SleepState getState() {
         return state;
+    }
+
+    /**
+     * Execute configured pause commands (e.g. "villagerTrader off") to stop other modules
+     * before AutoSleep takes control of Baritone.
+     */
+    private void executePauseCommands() {
+        if (pausedOtherModules) return; // already paused
+        var commands = PLUGIN_CONFIG.pauseCommands;
+        if (commands != null && !commands.isEmpty()) {
+            for (String cmd : commands) {
+                if (cmd != null && !cmd.isBlank()) {
+                    info("Executing pause command: {}", cmd);
+                    executeCommand(cmd, true);
+                }
+            }
+        }
+        pausedOtherModules = true;
+    }
+
+    /**
+     * Execute configured resume commands (e.g. "villagerTrader on") to restart other modules
+     * after AutoSleep finishes its sleep cycle.
+     */
+    private void executeResumeCommands() {
+        if (!pausedOtherModules) return; // nothing to resume
+        var commands = PLUGIN_CONFIG.resumeCommands;
+        if (commands != null && !commands.isEmpty()) {
+            for (String cmd : commands) {
+                if (cmd != null && !cmd.isBlank()) {
+                    info("Executing resume command: {}", cmd);
+                    executeCommand(cmd, true);
+                }
+            }
+        }
+        pausedOtherModules = false;
     }
 
     /**

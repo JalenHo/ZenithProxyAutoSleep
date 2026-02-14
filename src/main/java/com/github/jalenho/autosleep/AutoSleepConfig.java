@@ -16,8 +16,23 @@ public class AutoSleepConfig {
     // whether the bed position has been set
     public boolean bedSet = false;
 
+    // What to do after sleeping: "return" (go back to previous pos), "waypoint" (go to waypoint), "stay" (stay at bed)
+    public String postSleepAction = "return";
+
+    // ZenithProxy waypoint ID to go to after sleeping (used when postSleepAction = "waypoint")
+    // Set a waypoint first via the ZenithProxy "waypoints add <id> <x> <y> <z>" command
+    public String waypointId = "";
+
     // the day time tick at which the module starts trying to sleep (default: 12542 = dusk)
     public int nightStartTick = 12542;
     // the day time tick at which the module considers it day (default: 23460 = dawn)
     public int nightEndTick = 23460;
+
+    // Commands to execute before sleeping (to pause other modules)
+    // e.g. ["villagerTrader off"]
+    public java.util.List<String> pauseCommands = new java.util.ArrayList<>();
+
+    // Commands to execute after sleeping finishes (to resume other modules)
+    // e.g. ["villagerTrader on"]
+    public java.util.List<String> resumeCommands = new java.util.ArrayList<>();
 }
