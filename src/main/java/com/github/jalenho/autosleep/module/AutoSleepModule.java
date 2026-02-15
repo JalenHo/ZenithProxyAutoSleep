@@ -56,6 +56,10 @@ public class AutoSleepModule extends Module {
     // Whether we executed pause commands (so we know to resume later)
     private boolean pausedOtherModules = false;
 
+    // Track when sleeping started (for safety timeout)
+    private long sleepStartTime = 0;
+    private static final long MAX_SLEEP_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+
     @Override
     public boolean enabledSetting() {
         return PLUGIN_CONFIG.enabled;
@@ -103,6 +107,7 @@ public class AutoSleepModule extends Module {
         prevPosSaved = false;
         clickRetries = 0;
         pausedOtherModules = false;
+        sleepStartTime = 0;
     }
 
     private void handleBotTick(ClientBotTick event) {
@@ -164,6 +169,7 @@ public class AutoSleepModule extends Module {
         if (CACHE.getPlayerCache().getThePlayer().isSleeping()) {
             info("Player is now sleeping in bed!");
             state = SleepState.SLEEPING;
+            sleepStartTime = System.currentTimeMillis();
             return;
         }
 
@@ -206,6 +212,7 @@ public class AutoSleepModule extends Module {
         if (CACHE.getPlayerCache().getThePlayer().isSleeping()) {
             info("Player is now sleeping in bed!");
             state = SleepState.SLEEPING;
+            sleepStartTime = System.currentTimeMillis();
             return;
         }
 
@@ -252,16 +259,40 @@ public class AutoSleepModule extends Module {
     }
 
     private void handleSleeping() {
-        // Check if we woke up (server set isSleeping to false = morning!)
+        // Check if we woke up (server set isSleeping to false)
         if (!CACHE.getPlayerCache().getThePlayer().isSleeping()) {
-            info("Woke up! Night has been skipped.");
+            info("Woke up from bed. Starting post-sleep action.");
             blockLeaveBed = false;
             startPostSleepAction();
             return;
         }
 
-        // If it's no longer night but we're still sleeping, the server should wake us soon
-        // Just keep blocking leave_bed and wait
+        // FIX: If night ended naturally (not enough players to skip it), we must
+        // actively allow the bot to leave bed. In Minecraft 1.21.x, the server does
+        // NOT automatically kick you out of bed when morning arrives — it only wakes
+        // you when the night is actually skipped by enough players sleeping.
+        // Without this check, the bot would stay in bed forever.
+        long timeOfDay = getCurrentTimeOfDay();
+        if (timeOfDay >= 0) {
+            // We have fresh, valid time data — check if it's still night
+            int nightStart = PLUGIN_CONFIG.nightStartTick;
+            int nightEnd = PLUGIN_CONFIG.nightEndTick;
+            boolean stillNight = timeOfDay >= nightStart && timeOfDay <= nightEnd;
+            if (!stillNight && !isThunderStorm()) {
+                info("Night ended naturally without being skipped (tick={}). Allowing bot to leave bed.", timeOfDay);
+                blockLeaveBed = false;
+                // The Bot's tick will automatically send LEAVE_BED on the next game tick.
+                // On our next check, isSleeping() will be false and we'll transition out.
+                return;
+            }
+        }
+
+        // Safety timeout: if sleeping for over 15 minutes, something is wrong — force leave
+        if (sleepStartTime > 0 && System.currentTimeMillis() - sleepStartTime > MAX_SLEEP_DURATION_MS) {
+            info("Sleep safety timeout reached ({}min). Force-leaving bed.", MAX_SLEEP_DURATION_MS / 60000);
+            blockLeaveBed = false;
+            return;
+        }
     }
 
     /**
@@ -372,9 +403,13 @@ public class AutoSleepModule extends Module {
     }
 
     /**
-     * Get the current time of day (0-23999) with proper offset calculation,
-     * matching how ZenithProxy's WorldTimeData.toPacket() works.
-     * Returns -1 if unavailable or daylight cycle is disabled.
+     * Get the current time of day (0-23999) using server world time directly.
+     * Returns -1 if unavailable, stale, or daylight cycle is disabled.
+     *
+     * Uses the server's dayTime value without manual offset calculation to avoid
+     * drift issues. The server sends time updates every ~1 second, so the value
+     * is accurate to within ~20 ticks — negligible for night detection which
+     * spans ~11000 ticks.
      */
     private long getCurrentTimeOfDay() {
         WorldTimeData worldTimeData = CACHE.getChunkCache().getWorldTimeData();
@@ -387,10 +422,15 @@ public class AutoSleepModule extends Module {
         // If dayTime is negative, the daylight cycle is disabled (legacy check)
         if (dayTime < 0) return -1;
 
-        // Add offset for ticks elapsed since the last server time update
-        // (same calculation as WorldTimeData.toPacket())
-        long offset = (System.currentTimeMillis() - worldTimeData.getLastUpdate()) / 50;
-        return (dayTime + offset) % 24000;
+        // Verify the time data is reasonably fresh (server sends updates every ~1s)
+        // If stale for over 60 seconds, something is wrong — don't trust the value
+        long staleness = System.currentTimeMillis() - worldTimeData.getLastUpdate();
+        if (staleness > 60000) {
+            debug("World time data is stale ({}s old), cannot determine time of day", staleness / 1000);
+            return -1;
+        }
+
+        return dayTime % 24000;
     }
 
     private boolean isNightTime() {
