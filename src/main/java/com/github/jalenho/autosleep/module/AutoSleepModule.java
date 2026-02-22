@@ -1,7 +1,6 @@
 package com.github.jalenho.autosleep.module;
 
 import com.github.rfresh2.EventConsumer;
-import com.zenith.cache.data.chunk.WorldTimeData;
 import com.zenith.event.client.ClientBotTick;
 import com.zenith.feature.pathfinder.goals.GoalBlock;
 import com.zenith.feature.pathfinder.goals.GoalGetToBlock;
@@ -18,6 +17,7 @@ import com.zenith.util.timer.Timer;
 import com.zenith.util.timer.Timers;
 import org.geysermc.mcprotocollib.protocol.data.ProtocolState;
 import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PlayerState;
+import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundSetTimePacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundPlayerCommandPacket;
 
 import java.util.List;
@@ -60,6 +60,11 @@ public class AutoSleepModule extends Module {
     private long sleepStartTime = 0;
     private static final long MAX_SLEEP_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 
+    // Server exact time tracking
+    private volatile long serverTimeOfDay = -1;
+    private volatile boolean serverTickDayTime = true;
+    private volatile long lastServerTimeUpdate = 0;
+
     @Override
     public boolean enabledSetting() {
         return PLUGIN_CONFIG.enabled;
@@ -81,6 +86,7 @@ public class AutoSleepModule extends Module {
             .setPriority(1000)
             .state(ProtocolState.GAME, PacketHandlerStateCodec.<ClientSession>clientBuilder()
                 .outbound(ServerboundPlayerCommandPacket.class, new LeaveBedBlocker())
+                .inbound(ClientboundSetTimePacket.class, new TimeTracker())
                 .build())
             .build();
     }
@@ -108,6 +114,9 @@ public class AutoSleepModule extends Module {
         clickRetries = 0;
         pausedOtherModules = false;
         sleepStartTime = 0;
+        serverTimeOfDay = -1;
+        serverTickDayTime = true;
+        lastServerTimeUpdate = 0;
     }
 
     private void handleBotTick(ClientBotTick event) {
@@ -412,25 +421,17 @@ public class AutoSleepModule extends Module {
      * spans ~11000 ticks.
      */
     private long getCurrentTimeOfDay() {
-        WorldTimeData worldTimeData = CACHE.getChunkCache().getWorldTimeData();
-        if (worldTimeData == null) return -1;
+        if (serverTimeOfDay < 0) return -1;
 
-        // Check if daylight cycle is ticking (1.21+ uses tickDayTime flag)
-        if (!worldTimeData.isTickDayTime()) return -1;
+        if (!serverTickDayTime) return -1;
 
-        long dayTime = worldTimeData.getDayTime();
-        // If dayTime is negative, the daylight cycle is disabled (legacy check)
-        if (dayTime < 0) return -1;
-
-        // Verify the time data is reasonably fresh (server sends updates every ~1s)
-        // If stale for over 60 seconds, something is wrong — don't trust the value
-        long staleness = System.currentTimeMillis() - worldTimeData.getLastUpdate();
+        long staleness = System.currentTimeMillis() - lastServerTimeUpdate;
         if (staleness > 60000) {
-            debug("World time data is stale ({}s old), cannot determine time of day", staleness / 1000);
+            debug("Server time data is stale ({}s old), cannot determine time of day", staleness / 1000);
             return -1;
         }
 
-        return dayTime % 24000;
+        return Math.abs(serverTimeOfDay) % 24000;
     }
 
     private boolean isNightTime() {
@@ -509,6 +510,16 @@ public class AutoSleepModule extends Module {
                 debug("Blocked LEAVE_BED packet (auto-sleeping)");
                 return null; // drop the packet
             }
+            return packet;
+        }
+    }
+
+    public class TimeTracker implements PacketHandler<ClientboundSetTimePacket, ClientSession> {
+        @Override
+        public ClientboundSetTimePacket apply(ClientboundSetTimePacket packet, ClientSession session) {
+            serverTimeOfDay = packet.getDayTime();
+            serverTickDayTime = packet.isTickDayTime();
+            lastServerTimeUpdate = System.currentTimeMillis();
             return packet;
         }
     }
