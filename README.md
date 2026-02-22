@@ -4,7 +4,7 @@ A [ZenithProxy](https://github.com/rfresh2/ZenithProxy) plugin that automaticall
 
 ## Features
 
-- **Auto Night Detection** - Detects nighttime using accurate tick-based timing (with offset calculation matching ZenithProxy's internal logic)
+- **Auto Night Detection** - Detects nighttime using accurate packet-based timing by intercepting `ClientboundSetTimePacket`, perfectly matching the true server time and preventing mid-day sleep drift issues
 - **Thunderstorm Sleep** - Also triggers sleeping during thunderstorms
 - **Pathfinding to Bed** - Uses Baritone to navigate to the configured bed position
 - **Smart Bed Interaction** - Multi-phase approach: path adjacent → right-click with retry logic

@@ -36,7 +36,7 @@ desktop.ini
 maps/
 replays/
 plugins/
-*.json*
+*.json
 
 # Python (if any)
 __pycache__/
@@ -49,6 +49,7 @@ __pycache__/
 *.exe
 *.zip
 *.spec
+*.jar
 
 # Backup directories
 backup-*/
