@@ -2,6 +2,15 @@
 
 A [ZenithProxy](https://github.com/rfresh2/ZenithProxy) plugin that automatically finds the saved bed and sleeps at night to skip the server night cycle.
 
+## Supported Versions
+
+| Branch | Minecraft Version | Java Version |
+|--------|-------------------|--------------|
+| `26.1.2` (main) | 26.1.2 | Java 25 |
+| `1.21.4` | 1.21.4 | Java 21 |
+
+If you are using ZenithProxy for Minecraft 1.21.4, switch to the [`1.21.4`](https://github.com/JalenHo/ZenithProxyAutoSleep/tree/1.21.4) branch.
+
 ## Features
 
 - **Auto Night Detection** - Detects nighttime using accurate packet-based timing by intercepting `ClientboundSetTimePacket`, perfectly matching the true server time and preventing mid-day sleep drift issues
