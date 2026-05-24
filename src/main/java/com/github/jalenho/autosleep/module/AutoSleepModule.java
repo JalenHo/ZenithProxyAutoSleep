@@ -20,6 +20,8 @@ import org.geysermc.mcprotocollib.protocol.data.game.entity.player.PlayerState;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.clientbound.level.ClientboundSetTimePacket;
 import org.geysermc.mcprotocollib.protocol.packet.ingame.serverbound.player.ServerboundPlayerCommandPacket;
 
+import org.geysermc.mcprotocollib.protocol.data.game.level.ClockNetworkState;
+
 import java.util.List;
 import java.util.Optional;
 
@@ -515,10 +517,15 @@ public class AutoSleepModule extends Module {
     }
 
     public class TimeTracker implements PacketHandler<ClientboundSetTimePacket, ClientSession> {
+        private static final int DAY_TIME_CLOCK_ID = 1;
+
         @Override
         public ClientboundSetTimePacket apply(ClientboundSetTimePacket packet, ClientSession session) {
-            serverTimeOfDay = packet.getDayTime();
-            serverTickDayTime = packet.isTickDayTime();
+            ClockNetworkState dayTimeClock = packet.getClockUpdates().get(DAY_TIME_CLOCK_ID);
+            if (dayTimeClock != null) {
+                serverTimeOfDay = dayTimeClock.totalTicks();
+                serverTickDayTime = dayTimeClock.rate() > 0;
+            }
             lastServerTimeUpdate = System.currentTimeMillis();
             return packet;
         }
